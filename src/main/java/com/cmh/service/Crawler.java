@@ -31,14 +31,19 @@ import us.codecraft.webmagic.processor.PageProcessor;;
 
 @Service
 public class Crawler implements PageProcessor {
+    public static Category category;
     public static  int indexCounter = 0;
-    public static String prefix = "http://3g.163.com/touch/reconstruct/article/list/BAI6RHDKwangning/";
+    public static String prefix = "http://3g.163.com/touch/reconstruct/article/list/";
     public static String suffix = "-100.html";
+    public static ObjectMapper mapper = new ObjectMapper();
+    public static  int categoryIndex = 0;
     SimpleDateFormat sdf =   new SimpleDateFormat( "yyyy-MM-dd HH:mm:ss" );
-    @Autowired
-    ArticleRepository articleRepository;
+    public List<Category> categoryList;
+    
     @Autowired
     CategoryRepository categoryRepository;
+    @Autowired
+    ArticleRepository articleRepository;
     @Autowired
     NewsRepository newsRepository;
     @Autowired
@@ -48,17 +53,16 @@ public class Crawler implements PageProcessor {
     //1.抓取网站的相关配置，包括编码、抓取间隔、重试次数、
     private Site site = Site.me().setRetryTimes(0).setSleepTime(5000);
     public void process(Page page) {
-          Pattern pattern = Pattern.compile("artiList\\((.*)\\)");
+        Pattern pattern = Pattern.compile("artiList\\((.*)\\)");
         Matcher matcher = pattern.matcher(page.getRawText());
         String json = null;
         if (matcher.find()) {
             json = matcher.group(1);
         }
-        ObjectMapper mapper = new ObjectMapper();
         JsonNode rootNode;
         try {
             rootNode = mapper.readTree(json);
-            JsonNode mainJson = rootNode.path("BAI6RHDKwangning");
+            JsonNode mainJson = rootNode.path(category.getCategoryCode());
             //抽取对应标签下的所有json数据，即每一个小数据就是一个news实体。
             Iterator<JsonNode> iterator = mainJson.elements();
             String cur = null;
@@ -72,28 +76,41 @@ public class Crawler implements PageProcessor {
             }
 //            System.out.println("抓取到" + list.size() + "条新闻!!!!");
             //每一个iterator都是一个JsonNode节点，对应一个具体news实体。
-            dbService(list);
+            dbService(list, category);
             //进行数据存储操作
             indexCounter += 100;
-            page.addTargetRequest(prefix + indexCounter + suffix); 
+            if (400 != indexCounter) {
+                page.addTargetRequest(prefix + category.getCategoryCode() + "/" + indexCounter + suffix); 
+            } else {
+                indexCounter = 0;
+                categoryIndex++;
+                if (categoryIndex < categoryList.size()) {
+                    category = categoryList.get(categoryIndex);
+                    page.addTargetRequest(prefix + category.getCategoryCode() + "/" + indexCounter + suffix);
+                } else {
+                    categoryIndex = 0;
+                }
+            }
         } catch (IOException e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
         }
     }
-    public void dbService(List<Map<String, Object>> list) {
+    public   void dbService(List<Map<String, Object>> list, Category category) {
         try {
-            Category category = categoryRepository.findByCategoryName("game");
+            System.out.println("开始存储！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！");
                 for (Map<String, Object> map : list) {
-//
-//                    for (String s : map.keySet()) {
-//                        System.out.println(s + "=" + map.get(s));
-//                        System.out.println();
-//                    }
+                    for (String s : map.keySet()) {
+                        System.out.println(s + "=" + map.get(s));
+                        System.out.println();
+                    }
+                    if (map.containsKey("skipType")) {
+                        continue;
+                    }
                     if (newsRepository.findByDocid(map.get("docid").toString()) == null) {
-//                        System.out.println("开始数据填充~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
+                        System.out.println("开始数据填充~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
                         Article article = new Article();
-                        String url = "http://3g.163.com/play/17/1113/09/" + map.get("docid").toString() + ".html";
+                        String url = "http://3g.163.com/" + category.getCategoryName() +"/article/" + map.get("docid").toString() + ".html";
                         article.setUrl(url);
                         News news = new News();
                         Source source = sourceRepository.findBySourceName(map.get("source").toString());
@@ -107,7 +124,10 @@ public class Crawler implements PageProcessor {
                         news.setDocid(map.get("docid").toString());
                         news.setCommentCount(Integer.valueOf(map.get("commentCount").toString()));
                         news.setDigest(map.get("digest").toString());
-                        news.setHasImg(Integer.valueOf(map.get("hasImg").toString()));
+                        if (map.containsKey("hasImg")) {
+                            news.setHasImg(Integer.valueOf(map.get("hasImg").toString()));
+                        }
+                        
                         news.setImgsrc(map.get("imgsrc").toString());
                         news.setPriority(Integer.valueOf(map.get("priority").toString()));
                         news.setPtime(sdf.parse(map.get("ptime").toString()));
@@ -121,15 +141,17 @@ public class Crawler implements PageProcessor {
                         sourceRepository.save(source);
                         newsRepository.save(news);
                     } 
-//                    else {
-//                        System.out.println("已经有该条新闻=========================================================" + newsRepository.findByDocid(map.get("docid").toString()));
-//                    }
+                    
+                    else {
+                        System.out.println("已经有该条新闻=========================================================" + newsRepository.findByDocid(map.get("docid").toString()));
+                    }
                 }
         } catch (ParseException e) {
             System.out.println(e.getMessage() );
             e.printStackTrace();
         } catch (NullPointerException e) {
 //            System.out.println(news);
+            System.out.println("该打断点了！！！！！！！！！！！！！！！！！！！！！！！");
         }
     }
 
@@ -138,11 +160,14 @@ public class Crawler implements PageProcessor {
         return site;
     }
     public void runSpider() {
+        categoryList = categoryRepository.findAll();
+        category = categoryList.get(categoryIndex);
+        System.out.println(prefix + category.getCategoryCode() + "/" + indexCounter + suffix);
         Spider.create(this)
-//        .addUrl("http://3g.163.com/touch/reconstruct/article/list/BAI6RHDKwangning/20-5.html")
-        .addUrl(prefix + indexCounter + suffix)
+//        .addUrl("http://3g.163.com/touch/reconstruct/article/list/BAI6RHDKwangning/300-100.html")
+        .addUrl(prefix + category.getCategoryCode() + "/" + indexCounter + suffix)
         //开启5个线程抓取
-        .thread(5)
+        .thread(1)
         //启动
         .run();
     }
