@@ -28,6 +28,7 @@ public class News {
     private Source sourceId;
     private String imgsrc;
     private int priority;
+    @Column(columnDefinition="bit default 0", nullable=true)
     private int hasImg;
     private String digest;
     private int commentCount;
