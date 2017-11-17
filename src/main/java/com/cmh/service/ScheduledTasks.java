@@ -11,11 +11,11 @@ public class ScheduledTasks {
     Crawler crawler;
     @Autowired
     Crawler4Null crawler4Null;
-    @Scheduled(cron = "0 0 0/2 * * ?")
+    @Scheduled(cron = "0 0 0/3 * * ?")
     public void execute() {
          crawler.runSpider();
     }
-    @Scheduled(cron = "0 40 0/2 * * ?")
+    @Scheduled(cron = "0 40 0/5 * * ?")
     public void checkNullContent() {
         crawler4Null.runSpider();
     }
