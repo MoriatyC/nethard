@@ -9,8 +9,14 @@ public class ScheduledTasks {
 
     @Autowired
     Crawler crawler;
-    @Scheduled(cron = "* 28/30 * * * ?")
+    @Autowired
+    Crawler4Null crawler4Null;
+    @Scheduled(cron = "0 0 0/2 * * ?")
     public void execute() {
          crawler.runSpider();
+    }
+    @Scheduled(cron = "0 40 0/2 * * ?")
+    public void checkNullContent() {
+        crawler4Null.runSpider();
     }
 }

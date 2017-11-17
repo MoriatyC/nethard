@@ -5,6 +5,7 @@ import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -27,7 +28,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import us.codecraft.webmagic.Page;
 import us.codecraft.webmagic.Site;
 import us.codecraft.webmagic.Spider;
-import us.codecraft.webmagic.processor.PageProcessor;;
+import us.codecraft.webmagic.processor.PageProcessor;
+import us.codecraft.webmagic.selector.Selectable;;
 
 @Service
 public class Crawler implements PageProcessor {
@@ -39,6 +41,7 @@ public class Crawler implements PageProcessor {
     public static  int categoryIndex = 0;
     SimpleDateFormat sdf =   new SimpleDateFormat( "yyyy-MM-dd HH:mm:ss" );
     public List<Category> categoryList;
+    public List<String> urlList = new LinkedList<>();
     
     @Autowired
     CategoryRepository categoryRepository;
@@ -51,8 +54,55 @@ public class Crawler implements PageProcessor {
     
     public static String content;
     //1.抓取网站的相关配置，包括编码、抓取间隔、重试次数、
-    private Site site = Site.me().setRetryTimes(0).setSleepTime(5000);
+    private Site site = Site.me().setRetryTimes(3).setSleepTime(5000);
     public void process(Page page) {
+        if (urlList.size() != 0) {
+            urlList.remove(urlList.size() - 1);
+            parserArticle(page);
+            if (urlList.size() == 0) {
+                addTargetNewsURL(page);
+            }
+        } else {
+            parserNews(page);
+        }
+        
+    }
+    public void parserArticle(Page page) {
+        Selectable article = page.getHtml().xpath("article");
+        String content = article.toString();
+        Pattern p = Pattern.compile("<div class=\"footer\">(.*)</div>", Pattern.DOTALL);
+        Matcher m = p.matcher(content);
+        String footer = "";
+        if (m.find()) {
+            footer = m.group(0);
+        }
+        content = content.replace(footer, "").replace("data-src", "src");
+        String url = page.getUrl().toString();
+        dbServiceArticle(url, content);
+//        System.out.println(urlList.size());
+ 
+        
+    }
+    public void addTargetNewsURL(Page page) {
+        if (400 != indexCounter) {
+            page.addTargetRequest(prefix + category.getCategoryCode() + "/" + indexCounter + suffix); 
+        } else {
+            indexCounter = 0;
+            categoryIndex++;
+            if (categoryIndex < categoryList.size()) {
+                category = categoryList.get(categoryIndex);
+                page.addTargetRequest(prefix + category.getCategoryCode() + "/" + indexCounter + suffix);
+            } else {
+                categoryIndex = 0;
+            }
+        }
+    }
+    private void dbServiceArticle(String url, String content) {
+        Article article = articleRepository.findByUrl(url);
+        article.setContent(content);
+        articleRepository.save(article);
+    }
+    public void parserNews(Page page) {
         Pattern pattern = Pattern.compile("artiList\\((.*)\\)");
         Matcher matcher = pattern.matcher(page.getRawText());
         String json = null;
@@ -68,6 +118,8 @@ public class Crawler implements PageProcessor {
             String cur = null;
             JsonNode mark = null;
             List<Map<String, Object>> list = new ArrayList<>();
+            
+            
             while (iterator.hasNext()) {
                 mark = iterator.next();
                 cur = mark.toString();
@@ -76,34 +128,28 @@ public class Crawler implements PageProcessor {
             }
 //            System.out.println("抓取到" + list.size() + "条新闻!!!!");
             //每一个iterator都是一个JsonNode节点，对应一个具体news实体。
-            dbService(list, category);
-            //进行数据存储操作
+            
+            dbServiceNews(list, category);
             indexCounter += 100;
-            if (400 != indexCounter) {
-                page.addTargetRequest(prefix + category.getCategoryCode() + "/" + indexCounter + suffix); 
+            if (urlList.size() != 0) {
+                page.addTargetRequests(urlList);
             } else {
-                indexCounter = 0;
-                categoryIndex++;
-                if (categoryIndex < categoryList.size()) {
-                    category = categoryList.get(categoryIndex);
-                    page.addTargetRequest(prefix + category.getCategoryCode() + "/" + indexCounter + suffix);
-                } else {
-                    categoryIndex = 0;
-                }
+                addTargetNewsURL(page);
             }
+            //进行数据存储操作
+
         } catch (IOException e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
         }
     }
-    public   void dbService(List<Map<String, Object>> list, Category category) {
+    public void dbServiceNews(List<Map<String, Object>> list, Category category) {
         try {
-            System.out.println("开始存储！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！");
                 for (Map<String, Object> map : list) {
-                    for (String s : map.keySet()) {
-                        System.out.println(s + "=" + map.get(s));
-                        System.out.println();
-                    }
+//                    for (String s : map.keySet()) {
+//                        System.out.println(s + "=" + map.get(s));
+//                        System.out.println();
+//                    }
                     if (map.containsKey("skipType")) {
                         continue;
                     }
@@ -112,6 +158,7 @@ public class Crawler implements PageProcessor {
                         Article article = new Article();
                         String url = "http://3g.163.com/" + category.getCategoryName() +"/article/" + map.get("docid").toString() + ".html";
                         article.setUrl(url);
+                        urlList.add(url);
                         News news = new News();
                         Source source = sourceRepository.findBySourceName(map.get("source").toString());
                         if (source == null) {
@@ -143,7 +190,7 @@ public class Crawler implements PageProcessor {
                     } 
                     
                     else {
-                        System.out.println("已经有该条新闻=========================================================" + newsRepository.findByDocid(map.get("docid").toString()));
+                        System.out.println("已经有该条新闻");
                     }
                 }
         } catch (ParseException e) {
@@ -162,9 +209,8 @@ public class Crawler implements PageProcessor {
     public void runSpider() {
         categoryList = categoryRepository.findAll();
         category = categoryList.get(categoryIndex);
-        System.out.println(prefix + category.getCategoryCode() + "/" + indexCounter + suffix);
+//        System.out.println(prefix + category.getCategoryCode() + "/" + indexCounter + suffix);
         Spider.create(this)
-//        .addUrl("http://3g.163.com/touch/reconstruct/article/list/BAI6RHDKwangning/300-100.html")
         .addUrl(prefix + category.getCategoryCode() + "/" + indexCounter + suffix)
         //开启5个线程抓取
         .thread(1)
