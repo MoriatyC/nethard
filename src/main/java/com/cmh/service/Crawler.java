@@ -4,10 +4,13 @@ import java.io.IOException;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -17,32 +20,37 @@ import org.springframework.stereotype.Service;
 import com.cmh.dao.ArticleRepository;
 import com.cmh.dao.CategoryRepository;
 import com.cmh.dao.NewsRepository;
+import com.cmh.dao.RedisDao;
 import com.cmh.dao.SourceRepository;
-import com.cmh.model.Article;
-import com.cmh.model.Category;
-import com.cmh.model.News;
-import com.cmh.model.Source;
+import com.cmh.domain.Article;
+import com.cmh.domain.Category;
+import com.cmh.domain.News;
+import com.cmh.domain.Source;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import lombok.extern.slf4j.Slf4j;
 import us.codecraft.webmagic.Page;
 import us.codecraft.webmagic.Site;
 import us.codecraft.webmagic.Spider;
 import us.codecraft.webmagic.processor.PageProcessor;
-import us.codecraft.webmagic.selector.Selectable;;
 
+@Slf4j
 @Service
-public class Crawler implements PageProcessor {
+public class Crawler implements PageProcessor, Runnable {
     public static Category category;
     public static  int indexCounter = 0;
-    public static String prefix = "http://3g.163.com/touch/reconstruct/article/list/";
-    public static String suffix = "-100.html";
+    public static final String PREFIX = "http://3g.163.com/touch/reconstruct/article/list/";
+    public static final String SUFFIX = "-20.html";
     public static ObjectMapper mapper = new ObjectMapper();
     public static  int categoryIndex = 0;
     SimpleDateFormat sdf =   new SimpleDateFormat( "yyyy-MM-dd HH:mm:ss" );
     public List<Category> categoryList;
     public List<String> urlList = new LinkedList<>();
-    
+    public BlockingQueue<String> producer = new LinkedBlockingQueue<>();
+    @Autowired
+    RedisDao redisDao;
+    private final String WAITING_LIST = "waiting:";
     @Autowired
     CategoryRepository categoryRepository;
     @Autowired
@@ -55,52 +63,23 @@ public class Crawler implements PageProcessor {
     public static String content;
     //1.抓取网站的相关配置，包括编码、抓取间隔、重试次数、
     private Site site = Site.me().setRetryTimes(3).setSleepTime(5000);
+    @Override
     public void process(Page page) {
-        if (urlList.size() != 0) {
-            urlList.remove(urlList.size() - 1);
-            parserArticle(page);
-            if (urlList.size() == 0) {
-                addTargetNewsURL(page);
-            }
-        } else {
-            parserNews(page);
-        }
-        
-    }
-    public void parserArticle(Page page) {
-        Selectable article = page.getHtml().xpath("article");
-        String content = article.toString();
-        Pattern p = Pattern.compile("<div class=\"footer\">(.*)</div>", Pattern.DOTALL);
-        Matcher m = p.matcher(content);
-        String footer = "";
-        if (m.find()) {
-            footer = m.group(0);
-        }
-        content = content.replace(footer, "").replace("data-src", "src");
-        String url = page.getUrl().toString();
-        dbServiceArticle(url, content);
-//        System.out.println(urlList.size());
- 
-        
+          parserNews(page);
     }
     public void addTargetNewsURL(Page page) {
         if (400 != indexCounter) {
-            page.addTargetRequest(prefix + category.getCategoryCode() + "/" + indexCounter + suffix); 
+            page.addTargetRequest(PREFIX + category.getCategoryCode() + "/" + indexCounter + SUFFIX); 
         } else {
             indexCounter = 0;
             categoryIndex++;
             if (categoryIndex < categoryList.size()) {
                 category = categoryList.get(categoryIndex);
-                page.addTargetRequest(prefix + category.getCategoryCode() + "/" + indexCounter + suffix);
+                page.addTargetRequest(PREFIX + category.getCategoryCode() + "/" + indexCounter + SUFFIX);
             } else {
                 categoryIndex = 0;
             }
         }
-    }
-    private void dbServiceArticle(String url, String content) {
-        Article article = articleRepository.findByUrl(url);
-        article.setContent(content);
-        articleRepository.save(article);
     }
     public void parserNews(Page page) {
         Pattern pattern = Pattern.compile("artiList\\((.*)\\)");
@@ -119,47 +98,49 @@ public class Crawler implements PageProcessor {
             JsonNode mark = null;
             List<Map<String, Object>> list = new ArrayList<>();
             
-            
             while (iterator.hasNext()) {
                 mark = iterator.next();
                 cur = mark.toString();
-                Map<String, Object> map = mapper.readValue(cur, Map.class);
-                list.add(map);
+                try {
+                    Map<String, Object> map = mapper.readValue(cur, Map.class);
+                    list.add(map);
+                } catch(Exception e) {
+                    log.debug(cur);
+                }
             }
-//            System.out.println("抓取到" + list.size() + "条新闻!!!!");
             //每一个iterator都是一个JsonNode节点，对应一个具体news实体。
             
             dbServiceNews(list, category);
-            indexCounter += 100;
-            if (urlList.size() != 0) {
-                page.addTargetRequests(urlList);
-            } else {
-                addTargetNewsURL(page);
-            }
+            indexCounter += 20;
+            addTargetNewsURL(page);
             //进行数据存储操作
 
         } catch (IOException e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
+        } catch (Exception e) {
+            log.debug(json);
         }
     }
     public void dbServiceNews(List<Map<String, Object>> list, Category category) {
         try {
                 for (Map<String, Object> map : list) {
-//                    for (String s : map.keySet()) {
-//                        System.out.println(s + "=" + map.get(s));
-//                        System.out.println();
-//                    }
                     if (map.containsKey("skipType")) {
                         continue;
                     }
                     if (newsRepository.findByDocid(map.get("docid").toString()) == null) {
-                        System.out.println("开始数据填充~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
+                        log.info("开始数据填充~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
                         Article article = new Article();
-                        String url = "http://3g.163.com/" + category.getCategoryName() +"/article/" + map.get("docid").toString() + ".html";
+                        String url = "http://3g.163.com/" + category.getCategoryName() + "/article/"
+                                + map.get("docid").toString() + ".html";
                         article.setUrl(url);
-                        urlList.add(url);
+                        
+//                        urlList.add(url);
                         News news = new News();
+                        Map<String, String> hash = new HashMap<>();
+                        hash.put("voted", map.get("commentCount").toString());
+                        hash.put("title", map.get("title").toString());
+                        hash.put("url", url);
                         Source source = sourceRepository.findBySourceName(map.get("source").toString());
                         if (source == null) {
                             source = new Source();
@@ -187,18 +168,27 @@ public class Crawler implements PageProcessor {
                         articleRepository.save(article);
                         sourceRepository.save(source);
                         newsRepository.save(news);
+                        StringBuilder sb = new StringBuilder();
+                        sb.append("news:").append(map.get("docid").toString());
+                        
+                        redisDao.saddWithoutDuplication(WAITING_LIST, url);
+                        synchronized (redisDao) {
+                            redisDao.notify();
+                        }
+                        String member = sb.toString();
+                        redisDao.hsetWithExpired(member, hash);
+                        redisDao.zset("time:", System.currentTimeMillis() / 1000, member);
                     } 
                     
                     else {
-                        System.out.println("已经有该条新闻");
+                        log.info("已经有该条新闻");
                     }
                 }
         } catch (ParseException e) {
             System.out.println(e.getMessage() );
             e.printStackTrace();
         } catch (NullPointerException e) {
-//            System.out.println(news);
-            System.out.println("该打断点了！！！！！！！！！！！！！！！！！！！！！！！");
+            log.warn("该打断点了！！！！！！！！！！！！！！！！！！！！！！！");
         }
     }
 
@@ -211,10 +201,12 @@ public class Crawler implements PageProcessor {
         category = categoryList.get(categoryIndex);
 //        System.out.println(prefix + category.getCategoryCode() + "/" + indexCounter + suffix);
         Spider.create(this)
-        .addUrl(prefix + category.getCategoryCode() + "/" + indexCounter + suffix)
-        //开启5个线程抓取
-        .thread(1)
-        //启动
+        .addUrl(PREFIX + category.getCategoryCode() + "/" + indexCounter + SUFFIX)
+        .thread(16)
         .run();
+    }
+    @Override
+    public void run() {
+        runSpider();
     }
 }

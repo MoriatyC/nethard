@@ -9,7 +9,7 @@ import com.cmh.dao.ArticleRepository;
 import com.cmh.dao.CategoryRepository;
 import com.cmh.dao.NewsRepository;
 import com.cmh.dao.SourceRepository;
-import com.cmh.model.Article;
+import com.cmh.domain.Article;
 
 import us.codecraft.webmagic.Page;
 import us.codecraft.webmagic.Site;
@@ -33,7 +33,7 @@ public class Crawler4Null implements PageProcessor {
     //1.抓取网站的相关配置，包括编码、抓取间隔、重试次数、
     private Site site = Site.me().setRetryTimes(3).setSleepTime(5000);
     public void process(Page page) {
-        crawler.parserArticle(page);
+//        crawler.parserArticle(page);
     }
 
 

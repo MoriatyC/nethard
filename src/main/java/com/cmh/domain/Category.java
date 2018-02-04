@@ -1,4 +1,4 @@
-package com.cmh.model;
+package com.cmh.domain;
 
 import java.util.Date;
 
@@ -16,4 +16,5 @@ public class Category {
     @Id
     private String categoryCode;
     private String categoryName;
+    private String chineseName;
 }
